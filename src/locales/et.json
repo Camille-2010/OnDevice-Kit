@@ -1,0 +1,28 @@
+{
+  "common": {
+    "cancel": "Katkesta",
+    "delete": "Kustuta",
+    "dismiss": "Loobu",
+    "rename": "Muuda nime",
+    "reset": "Lähtesta",
+    "save": "Salvesta",
+    "update": "Uuenda",
+    "error": "Viga",
+    "export": "Ekspordi",
+    "networkError": "Võrguühenduse viga. Palun proovi uuesti."
+  },
+  "onboarding": {
+    "screen1": {
+      "title": "Sinu AI, otse taskus.",
+      "titleAccent": "taskus.",
+      "body": "Eraklik abiline, mis töötab sinu telefonis ja vajadusel kasutab pilvemudeleid. Seadistame kõik ühe minutiga."
+    },
+    "screen5": {
+      "title": "Mida sooviksid teha?",
+      "body": "Vali, mida soovid uurida — me valmistame sinu telefonile sobivad tööriistad.",
+      "topicDescription": {
+        "else": "Vaata ülejäänud hiljem rakenduses"
+      }
+    }
+  }
+}

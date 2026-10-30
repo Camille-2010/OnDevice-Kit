@@ -1,0 +1,75 @@
+{
+ "version": 1,
+ "gsvVersion": "v2",
+ "sampleRate": 32000,
+ "refText": "今天要开始什么课程呢？",
+ "refNormText": "今天要开始什么课程呢?",
+ "refLang": "zh",
+ "refAudio": "arona_academy_talk_1.wav",
+ "promptSemanticLen": 1,
+ "referSpecShape": [
+  1,
+  1025,
+  102
+ ],
+ "refPhones": [
+  "j",
+  "in1",
+  "t",
+  "ian1",
+  "y",
+  "ao4",
+  "k",
+  "ai1",
+  "sh",
+  "ir3",
+  "sh",
+  "en2",
+  "m",
+  "e5",
+  "k",
+  "e4",
+  "ch",
+  "eng2",
+  "n",
+  "e5",
+  "?"
+ ],
+ "refPhonesIds": [
+  221,
+  196,
+  252,
+  176,
+  318,
+  120,
+  222,
+  102,
+  251,
+  213,
+  251,
+  141,
+  225,
+  134,
+  222,
+  133,
+  125,
+  146,
+  227,
+  134,
+  4
+ ],
+ "refBertShape": [
+  1024,
+  21
+ ],
+ "onnxFiles": {
+  "shared": [
+   "bert.onnx"
+  ],
+  "role": [
+   "gpt_encoder.onnx",
+   "gpt_step.onnx",
+   "sovits.onnx"
+  ]
+ }
+}

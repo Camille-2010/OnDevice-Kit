@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 云端功能防抓包（MITM）基线：
+         · 只信任系统预置 CA——用户/adb 安装的 CA（Charles/Fiddler 等
+           抓包工具的根证书）不被信任，HTTPS 中间人抓包直接握手失败。
+         · 明文 HTTP 仍然放行：PocketPal 需要连用户自建局域网 LLM 服务器
+           （LM Studio / Ollama / llama.cpp），地址是用户任意输入的 IP，
+           无法按域名白名单。云端 API 全部走 HTTPS，不受影响。 -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- 仅 debug 构建信任用户安装的 CA，开发时可以用 Charles 调试；
+         release 构建永远只信系统 CA。 -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

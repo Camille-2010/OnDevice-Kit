@@ -1,0 +1,262 @@
+import * as Keychain from 'react-native-keychain';
+import {makePersistable} from 'mobx-persist-store';
+
+import {SearchProviderStore, SEARCH_PROVIDERS} from '../SearchProviderStore';
+import * as budget from '../../services/search/searchBudget';
+
+// `mobx-persist-store` is globally mocked (jest.config.js moduleNameMapper →
+// __mocks__/external/mobx-persist-store.js); `makePersistable` is a jest.fn.
+const persistMock = makePersistable as jest.Mock;
+
+const setMock = Keychain.setGenericPassword as jest.Mock;
+const getMock = Keychain.getGenericPassword as jest.Mock;
+const resetMock = Keychain.resetGenericPassword as jest.Mock;
+
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+describe('SearchProviderStore', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    getMock.mockResolvedValue(false);
+  });
+
+  const newStore = async () => {
+    const store = new SearchProviderStore();
+    await flush();
+    return store;
+  };
+
+  describe('initial state', () => {
+    it('defaults to the keyless built-in (duckduckgo), result count 5, no consent', async () => {
+      const store = await newStore();
+      expect(store.activeProviderId).toBe('duckduckgo');
+      expect(store.activeProviderRequiresKey).toBe(false);
+      expect(store.resultCount).toBe(5);
+      expect(store.hasConsentedToSearch).toBe(false);
+    });
+
+    it('lists Parallel as gated (not selectable)', () => {
+      const parallel = SEARCH_PROVIDERS.find(p => p.id === 'parallel');
+      expect(parallel?.selectable).toBe(false);
+    });
+
+    it('marks DuckDuckGo as keyless and the premium providers as keyed', () => {
+      const duck = SEARCH_PROVIDERS.find(p => p.id === 'duckduckgo');
+      const brave = SEARCH_PROVIDERS.find(p => p.id === 'brave');
+      expect(duck?.requiresKey).toBe(false);
+      expect(brave?.requiresKey).toBe(true);
+    });
+
+    it('reads each provider key under its own keychain service on load', async () => {
+      await newStore();
+      for (const {id} of SEARCH_PROVIDERS) {
+        expect(getMock).toHaveBeenCalledWith({
+          service: `search_provider_service_${id}`,
+        });
+      }
+    });
+  });
+
+  describe('secure-store boundary (keys never in plain storage)', () => {
+    it('persists only non-secret prefs via AsyncStorage, never a key field', async () => {
+      await newStore();
+      const config = persistMock.mock.calls[0][1];
+      expect(config.properties).toEqual([
+        'activeProviderId',
+        'resultCount',
+        'hasConsentedToSearch',
+      ]);
+      expect(config.properties).not.toContain('keys');
+      expect(JSON.stringify(config.properties)).not.toMatch(/key/i);
+    });
+
+    it('writes BYOK keys only through Keychain, not via the persisted store', async () => {
+      const store = await newStore();
+      persistMock.mockClear();
+      await store.setKey('tavily', 'tav-secret');
+      expect(setMock).toHaveBeenCalledWith('tavily', 'tav-secret', {
+        service: 'search_provider_service_tavily',
+      });
+      const persistedKeys = persistMock.mock.calls.flatMap(
+        c => c[1]?.properties ?? [],
+      );
+      expect(persistedKeys).not.toContain('keys');
+    });
+  });
+
+  describe('per-provider key isolation', () => {
+    it('writes a key under the provider-specific service', async () => {
+      const store = await newStore();
+      await store.setKey('tavily', 'tav-key');
+
+      expect(setMock).toHaveBeenCalledWith('tavily', 'tav-key', {
+        service: 'search_provider_service_tavily',
+      });
+      expect(store.hasKey('tavily')).toBe(true);
+      expect(store.hasKey('brave')).toBe(false);
+      expect(store.getKey('brave')).toBe('');
+    });
+
+    it('clears a key under the provider-specific service', async () => {
+      const store = await newStore();
+      await store.setKey('exa', 'exa-key');
+      expect(store.hasKey('exa')).toBe(true);
+
+      await store.clearKey('exa');
+      expect(resetMock).toHaveBeenCalledWith({
+        service: 'search_provider_service_exa',
+      });
+      expect(store.hasKey('exa')).toBe(false);
+    });
+
+    it('loads a stored key only for the provider that has one', async () => {
+      getMock.mockImplementation((opts: {service: string}) =>
+        opts.service === 'search_provider_service_tavily'
+          ? Promise.resolve({password: 'stored-tav', username: 'tavily'})
+          : Promise.resolve(false),
+      );
+      const store = await newStore();
+      expect(store.getKey('tavily')).toBe('stored-tav');
+      expect(store.hasKey('brave')).toBe(false);
+    });
+  });
+
+  describe('preferences', () => {
+    it('sets the active provider only for selectable providers', async () => {
+      const store = await newStore();
+      // Switch away from the duckduckgo default so the write is observable.
+      store.setActiveProvider('tavily');
+      expect(store.activeProviderId).toBe('tavily');
+
+      store.setActiveProvider('parallel');
+      expect(store.activeProviderId).toBe('tavily');
+    });
+
+    it('clamps result count into range', async () => {
+      const store = await newStore();
+      store.setResultCount(0);
+      expect(store.resultCount).toBe(1);
+      store.setResultCount(99);
+      expect(store.resultCount).toBe(8);
+      store.setResultCount(4);
+      expect(store.resultCount).toBe(4);
+    });
+
+    it('records consent', async () => {
+      const store = await newStore();
+      store.setConsent(true);
+      expect(store.hasConsentedToSearch).toBe(true);
+    });
+  });
+
+  describe('post-hydration normalization (persisted prefs bypass setters)', () => {
+    it('resets a persisted gated/unknown provider to the default', async () => {
+      const store = await newStore();
+      store.activeProviderId = 'parallel'; // gated; only reachable via stale storage
+      store.normalizeHydratedPrefs();
+      expect(store.activeProviderId).toBe('duckduckgo');
+    });
+
+    it('clamps a persisted out-of-range result count', async () => {
+      const store = await newStore();
+      store.resultCount = 99;
+      store.normalizeHydratedPrefs();
+      expect(store.resultCount).toBe(8);
+
+      store.resultCount = 0;
+      store.normalizeHydratedPrefs();
+      expect(store.resultCount).toBe(1);
+    });
+
+    it('leaves valid persisted prefs unchanged', async () => {
+      const store = await newStore();
+      store.activeProviderId = 'tavily';
+      store.resultCount = 4;
+      store.hasConsentedToSearch = true;
+      store.normalizeHydratedPrefs();
+      expect(store.activeProviderId).toBe('tavily');
+      expect(store.resultCount).toBe(4);
+      expect(store.hasConsentedToSearch).toBe(true);
+    });
+
+    it('treats a non-boolean persisted consent as no consent', async () => {
+      const store = await newStore();
+      (store as any).hasConsentedToSearch = 'false'; // truthy string from tampered storage
+      store.normalizeHydratedPrefs();
+      expect(store.hasConsentedToSearch).toBe(false);
+      expect(store.canSearch).toBe(false);
+    });
+
+    it('restores the default on a non-numeric or non-finite persisted count', async () => {
+      const store = await newStore();
+      for (const bad of ['bad', NaN, null, {}, Infinity]) {
+        (store as any).resultCount = bad;
+        store.normalizeHydratedPrefs();
+        expect(store.resultCount).toBe(5);
+      }
+    });
+  });
+
+  describe('isProviderConfigured', () => {
+    it('is always true for the keyless built-in provider', async () => {
+      const store = await newStore();
+      expect(store.activeProviderId).toBe('duckduckgo');
+      expect(store.activeProviderRequiresKey).toBe(false);
+      expect(store.isProviderConfigured).toBe(true);
+    });
+
+    it('is false for a keyed provider with no key, true once it has a key', async () => {
+      const store = await newStore();
+      store.setActiveProvider('brave'); // keyed
+      expect(store.activeProviderRequiresKey).toBe(true);
+      expect(store.isProviderConfigured).toBe(false);
+      await store.setKey('brave', 'k');
+      expect(store.isProviderConfigured).toBe(true);
+    });
+  });
+
+  describe('canSearch (consent + key, load-bearing at execution)', () => {
+    it('needs only consent for the keyless default', async () => {
+      const store = await newStore();
+      expect(store.canSearch).toBe(false);
+
+      store.setConsent(true);
+      expect(store.canSearch).toBe(true); // keyless default, consent alone suffices
+
+      store.setConsent(false);
+      expect(store.canSearch).toBe(false);
+    });
+
+    it('still requires a key for keyed providers', async () => {
+      const store = await newStore();
+      store.setActiveProvider('brave');
+      expect(store.canSearch).toBe(false);
+
+      store.setConsent(true);
+      expect(store.canSearch).toBe(false); // keyed, no key yet
+
+      await store.setKey('brave', 'k');
+      expect(store.canSearch).toBe(true);
+
+      store.setConsent(false);
+      expect(store.canSearch).toBe(false);
+    });
+  });
+
+  describe('cache invalidation on auth-boundary changes', () => {
+    it('resets the search cache on key/consent/provider changes', async () => {
+      const reset = jest.spyOn(budget, 'resetSearchCache');
+      const store = await newStore();
+      reset.mockClear();
+
+      await store.setKey('tavily', 'k');
+      await store.clearKey('tavily');
+      store.setConsent(true);
+      store.setActiveProvider('brave');
+
+      // setKey + clearKey + setConsent + setActiveProvider each invalidate.
+      expect(reset.mock.calls.length).toBeGreaterThanOrEqual(4);
+      reset.mockRestore();
+    });
+  });
+});

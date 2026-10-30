@@ -1,0 +1,30 @@
+diff --git a/node_modules/@pocketpalai/react-native-speech/android/src/main/java/com/pocketpalai/speech/RNSpeechModule.kt b/node_modules/@pocketpalai/react-native-speech/android/src/main/java/com/pocketpalai/speech/RNSpeechModule.kt
+index 5b0c9ff..655a468 100644
+--- a/node_modules/@pocketpalai/react-native-speech/android/src/main/java/com/pocketpalai/speech/RNSpeechModule.kt
++++ b/node_modules/@pocketpalai/react-native-speech/android/src/main/java/com/pocketpalai/speech/RNSpeechModule.kt
+@@ -699,7 +699,24 @@ class RNSpeechModule(reactContext: ReactApplicationContext) :
+     }
+     selectedEngine = engineName
+ 
+-    invalidate()
++    // PATCH(pocketpalai): soft-rebind instead of invalidate(). invalidate()
++    // runs the module's full lifecycle teardown — audioExecutor.shutdown()
++    // permanently kills the shared thread pool while JS is still using the
++    // module (every later neural call throws "rejected from
++    // ThreadPoolExecutor [Terminated]"). Tearing down only the synthesizer
++    // is enough for the next initializeTTS() to bind the new engine.
++    synchronized(initLock) {
++      if (::synthesizer.isInitialized) {
++        try {
++          synthesizer.stop()
++          synthesizer.shutdown()
++        } catch (_: Exception) {
++        }
++      }
++      isInitialized = false
++      isInitializing = false
++    }
++    resetQueueState()
+ 
+     pendingOperations.add(Pair({ promise.resolve(null) }, promise))
+     initializeTTS()

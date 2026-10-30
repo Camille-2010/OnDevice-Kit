@@ -1,0 +1,34 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 369 217" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="16" y1="38" x2="120" y2="179" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE14D"/>
+      <stop offset="1" stop-color="#FFA823"/>
+    </linearGradient>
+    <linearGradient id="b" x1="132" y1="38" x2="236" y2="179" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4F8CFF"/>
+      <stop offset="1" stop-color="#2F6FE0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Card 1: fast / lightweight -->
+  <rect x="16" y="38" width="104" height="141" rx="16" fill="#FFFFFF" stroke="#ECECEC" stroke-width="2"/>
+  <circle cx="68" cy="86" r="23" fill="url(#g)"/>
+  <path d="M68 74 L60 92 H68 L64 103 L78 85 H68 Z" fill="#FFFFFF"/>
+  <rect x="34" y="124" width="68" height="8" rx="4" fill="#E6E6E6"/>
+  <rect x="44" y="140" width="48" height="8" rx="4" fill="#EDEDED"/>
+
+  <!-- Card 2: private -->
+  <rect x="132" y="38" width="104" height="141" rx="16" fill="#FFFFFF" stroke="#ECECEC" stroke-width="2"/>
+  <circle cx="184" cy="86" r="23" fill="url(#b)"/>
+  <rect x="176" y="80" width="16" height="13" rx="2" fill="#FFFFFF"/>
+  <path d="M179 80 v-4 a5 5 0 0 1 10 0 v4" stroke="#FFFFFF" stroke-width="2.4" fill="none"/>
+  <rect x="150" y="124" width="68" height="8" rx="4" fill="#E6E6E6"/>
+  <rect x="160" y="140" width="48" height="8" rx="4" fill="#EDEDED"/>
+
+  <!-- Card 3: on-device AI -->
+  <rect x="248" y="38" width="104" height="141" rx="16" fill="#FFFFFF" stroke="#ECECEC" stroke-width="2"/>
+  <circle cx="300" cy="86" r="23" fill="url(#g)"/>
+  <path d="M300 74 L302.6 81.4 L310 84 L302.6 86.6 L300 94 L297.4 86.6 L290 84 L297.4 81.4 Z" fill="#FFFFFF"/>
+  <rect x="266" y="124" width="68" height="8" rx="4" fill="#E6E6E6"/>
+  <rect x="276" y="140" width="48" height="8" rx="4" fill="#EDEDED"/>
+</svg>

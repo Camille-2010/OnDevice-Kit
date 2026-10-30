@@ -1,0 +1,686 @@
+import * as React from 'react';
+import {
+  TextInput,
+  TextInputProps,
+  View,
+  Animated,
+  TouchableOpacity,
+  Alert,
+  ScrollView,
+  Image,
+} from 'react-native';
+import {launchCamera, launchImageLibrary} from 'react-native-image-picker';
+import {useCameraPermission} from 'react-native-vision-camera';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+
+import {observer} from 'mobx-react';
+import {IconButton, Text, Snackbar} from 'react-native-paper';
+
+import {hasVideoCapability} from '../../utils/pal-capabilities';
+
+import {VideoRecorderIcon, PlusIcon, AtomIcon} from '../../assets/icons';
+
+import {useTheme} from '../../hooks';
+import {SurfaceCard} from '../GlassSurface';
+
+import {createStyles} from './styles';
+
+import {chatSessionStore, modelStore, palStore} from '../../store';
+
+import {MessageType} from '../../utils/types';
+import {L10nContext, UserContext} from '../../utils';
+import {t} from '../../locales';
+import {
+  persistPickedImage,
+  persistPickedImages,
+} from '../../utils/imageStorage';
+
+import {SendButton, StopButton, Menu, VoiceChip} from '..';
+import {motionSpring} from '../../utils/disableMotion';
+
+export interface ChatInputTopLevelProps {
+  /** Whether the AI is currently streaming tokens */
+  isStreaming?: boolean;
+  /** Will be called on {@link SendButton} tap. Has {@link MessageType.PartialText} which can
+   * be transformed to {@link MessageType.Text} and added to the messages list. */
+  onSendPress: (message: MessageType.PartialText) => void;
+  onStopPress?: () => void;
+  onCancelEdit?: () => void;
+  isStopVisible?: boolean;
+  /** Controls the visibility behavior of the {@link SendButton} based on the
+   * `TextInput` state. Defaults to `editing`. */
+  sendButtonVisibilityMode?: 'always' | 'editing';
+  textInputProps?: TextInputProps;
+  inputBackgroundColor?: string;
+  /** External control for selected images (for edit mode) */
+  defaultImages?: string[];
+  onDefaultImagesChange?: (images: string[]) => void;
+
+  /** Camera-specific props */
+  isCameraActive?: boolean;
+  onStartCamera?: () => void;
+  /** For camera input, allows direct editing of the prompt text */
+  promptText?: string;
+  onPromptTextChange?: (text: string) => void;
+  /** Whether to show the image upload button */
+  showImageUpload?: boolean;
+  isVisionEnabled?: boolean;
+  /** Whether to show the thinking toggle button */
+  showThinkingToggle?: boolean;
+  /** Whether thinking mode is currently enabled */
+  isThinkingEnabled?: boolean;
+  /** Callback when thinking toggle is pressed */
+  onThinkingToggle?: (enabled: boolean) => void;
+  /** Whether the model supports graded reasoning effort (axis 2) */
+  supportsEffort?: boolean;
+  /** The graded effort value set, e.g. ['low','medium','high'] */
+  effortValues?: string[];
+  /** Currently selected reasoning effort (when graded) */
+  reasoningEffort?: string;
+  /** Callback to cycle the graded effort state (off -> values -> off) */
+  onEffortCycle?: () => void;
+}
+
+export interface ChatInputAdditionalProps {
+  /** Camera-specific props */
+  isCameraActive?: boolean;
+  onStartCamera?: () => void;
+  /** For camera input, allows direct editing of the prompt text */
+  promptText?: string;
+  onPromptTextChange?: (text: string) => void;
+  /** Whether to show the image upload button */
+  showImageUpload?: boolean;
+  /** Whether to show the thinking toggle button */
+  showThinkingToggle?: boolean;
+  /** Whether thinking mode is currently enabled */
+  isThinkingEnabled?: boolean;
+  /** Callback when thinking toggle is pressed */
+  onThinkingToggle?: (enabled: boolean) => void;
+  /** Whether the model supports graded reasoning effort (axis 2) */
+  supportsEffort?: boolean;
+  /** The graded effort value set, e.g. ['low','medium','high'] */
+  effortValues?: string[];
+  /** Currently selected reasoning effort (when graded) */
+  reasoningEffort?: string;
+  /** Callback to cycle the graded effort state (off -> values -> off) */
+  onEffortCycle?: () => void;
+}
+
+export type ChatInputProps = ChatInputTopLevelProps & ChatInputAdditionalProps;
+
+const hapticOptions = {
+  enableVibrateFallback: true,
+  ignoreAndroidSystemSettings: false,
+};
+
+/** Bottom bar input component with a text input, attachment and
+ * send buttons inside. By default hides send button when text input is empty. */
+export const ChatInput = observer(
+  ({
+    isStreaming = false,
+    onSendPress,
+    onStopPress,
+    onCancelEdit,
+    isStopVisible,
+    sendButtonVisibilityMode,
+    textInputProps,
+    inputBackgroundColor,
+    isCameraActive = false,
+    onStartCamera,
+    promptText,
+    onPromptTextChange,
+    showImageUpload = false,
+    isVisionEnabled = false,
+    defaultImages,
+    onDefaultImagesChange,
+    showThinkingToggle = false,
+    isThinkingEnabled = false,
+    onThinkingToggle,
+    supportsEffort = false,
+    effortValues = [],
+    reasoningEffort,
+    onEffortCycle,
+  }: ChatInputProps) => {
+    const l10n = React.useContext(L10nContext);
+    const theme = useTheme();
+    const user = React.useContext(UserContext);
+    const inputRef = React.useRef<TextInput>(null);
+    const editBarHeight = React.useRef(new Animated.Value(0)).current;
+    const activePalId = chatSessionStore.activePalId;
+    const currentActivePal = palStore.pals.find(pal => pal.id === activePalId);
+
+    // Camera permission hook from react-native-vision-camera
+    const {hasPermission, requestPermission} = useCameraPermission();
+
+    const hasActiveModel = !!modelStore.activeModelId;
+
+    // Use `defaultValue` if provided
+    const [text, setText] = React.useState(textInputProps?.defaultValue ?? '');
+    // State for selected images - use external control when provided
+    const [internalSelectedImages, setInternalSelectedImages] = React.useState<
+      string[]
+    >([]);
+    const selectedImages = defaultImages ?? internalSelectedImages;
+    const setSelectedImages =
+      onDefaultImagesChange ?? setInternalSelectedImages;
+    // State for image upload menu
+    const [showImageUploadMenu, setShowImageUploadMenu] = React.useState(false);
+    const [noVisionVisible, setNoVisionVisible] = React.useState(false);
+    // State for showing "model not loaded" helper text
+    const [showModelWarning, setShowModelWarning] = React.useState(false);
+    const isEditMode = chatSessionStore.isEditMode;
+
+    const styles = createStyles({theme, isEditMode});
+
+    // For camera input, use promptText if provided
+    const isVideoCapable =
+      currentActivePal && hasVideoCapability(currentActivePal);
+    const value =
+      isVideoCapable && promptText !== undefined
+        ? promptText
+        : (textInputProps?.value ?? text);
+
+    React.useEffect(() => {
+      if (isEditMode) {
+        // Animate edit bar height
+        motionSpring(editBarHeight, {
+          toValue: 28,
+          useNativeDriver: false,
+          friction: 8,
+        }).start();
+        // Focus input
+        inputRef.current?.focus();
+      } else {
+        motionSpring(editBarHeight, {
+          toValue: 0,
+          useNativeDriver: false,
+          friction: 8,
+        }).start();
+        onCancelEdit?.();
+      }
+    }, [isEditMode, editBarHeight, onCancelEdit]);
+
+    const handleChangeText = (newText: string) => {
+      if (isVideoCapable && onPromptTextChange) {
+        onPromptTextChange(newText);
+      } else {
+        setText(newText);
+        textInputProps?.onChangeText?.(newText);
+      }
+    };
+
+    const handleSend = () => {
+      const trimmedValue = value.trim();
+      if (trimmedValue) {
+        // Check if model is loaded before sending
+        if (!hasActiveModel) {
+          // Trigger haptic feedback to indicate the action is blocked
+          ReactNativeHapticFeedback.trigger(
+            'notificationWarning',
+            hapticOptions,
+          );
+          // Show warning helper text
+          setShowModelWarning(true);
+          // Auto-hide after 3 seconds
+          setTimeout(() => setShowModelWarning(false), 3000);
+          return;
+        }
+
+        // Include imageUris in the message object
+        onSendPress({
+          text: trimmedValue,
+          type: 'text',
+          imageUris: selectedImages.length > 0 ? selectedImages : undefined,
+        });
+        setText('');
+        // Clear selected images after sending
+        setSelectedImages([]);
+      }
+    };
+
+    // Handle plus button press to show image upload menu
+    const handlePlusButtonPress = () => {
+      setShowImageUploadMenu(true);
+    };
+
+    // Need to figure this out:
+    // Handle taking a photo with the camera using react-native-image-picker
+    // but with permission checking from react-native-vision-camera
+    const handleTakePhoto = async () => {
+      try {
+        if (!hasPermission) {
+          const permissionResult = await requestPermission();
+          if (!permissionResult) {
+            Alert.alert(
+              l10n.camera.permissionTitle,
+              l10n.camera.permissionMessage,
+            );
+            setShowImageUploadMenu(false);
+            return;
+          }
+        }
+
+        // Disable auto-release during camera operation
+        // this is only needed on Android.
+        modelStore.disableAutoRelease('camera-photo');
+
+        const result = await launchCamera({
+          mediaType: 'photo',
+          quality: 0.8,
+          // ⚠️ 必须限边长：相机原图动辄 4000×3000（旗舰机甚至 5000 万像素），
+          // mtmd 在手机上编码这么大的图要几十秒到几分钟，而预填充期间一个 token
+          // 都不会产出 → 触发 AgentRunner 的看门狗，用户看到的就是「生成失败: 识别超时」。
+          // 768 与主流聊天应用一致：识别内容够用，视觉编码量比 1024 少约 44%。
+          maxWidth: 768,
+          maxHeight: 768,
+        });
+
+        if (result.errorCode === 'camera_unavailable') {
+          Alert.alert(l10n.camera.errorTitle, l10n.camera.noDevice);
+        } else if (result.errorCode) {
+          Alert.alert(
+            l10n.errors.cameraErrorTitle,
+            l10n.errors.cameraErrorMessage,
+          );
+        } else if (
+          result.assets &&
+          result.assets.length > 0 &&
+          result.assets[0].uri
+        ) {
+          // ⚠️ 必须转存：相机返回的 content:// 原生层（mtmd / llama.rn）读不了，
+          // 直接透传的结果就是「图选了但识别不了」。转存到私有目录后返回
+          // file:// 路径，原生层和 RNFS 都能正常读取。
+          const localUri = await persistPickedImage(result.assets[0].uri);
+          const newImages = [...selectedImages, localUri];
+          setSelectedImages(newImages);
+        }
+        setShowImageUploadMenu(false);
+      } catch (error) {
+        console.error('Error taking photo:', error);
+        Alert.alert(
+          l10n.errors.cameraErrorTitle,
+          l10n.errors.cameraErrorMessage,
+        );
+      } finally {
+        // Re-enable auto-release after camera operation
+        modelStore.enableAutoRelease('camera-photo');
+      }
+    };
+
+    // Handle selecting images from the gallery
+    const handleSelectImages = async () => {
+      try {
+        // Disable auto-release during gallery operation
+        // this is only needed on Android.
+        modelStore.disableAutoRelease('image-gallery');
+
+        const result = await launchImageLibrary({
+          mediaType: 'photo',
+          selectionLimit: 5, // Allow multiple images
+          quality: 0.8,
+          // ⚠️ 必须限边长：相册原图动辄 4000×3000，mtmd 编码一张这么大的图
+          // 在手机上要几十秒到几分钟 → 触发看门狗。768 与主流应用一致，
+          // 识别内容够用，编码量比 1024 少约 44%；多选时 5 张也可控。
+          maxWidth: 768,
+          maxHeight: 768,
+        });
+
+        if (result.assets && result.assets.length > 0) {
+          const rawUris = result.assets
+            .filter(asset => asset.uri)
+            .map(asset => asset.uri as string);
+
+          if (rawUris.length > 0) {
+            // ⚠️ 相册返回的同样是 content://，必须转存成 file:// 才能被
+            // mtmd 读取。转存失败会抛错，由下面的 catch 给出明确提示，
+            // 不会把坏路径静默塞进消息里。
+            const localUris = await persistPickedImages(rawUris);
+            const newImages = [...selectedImages, ...localUris];
+            setSelectedImages(newImages);
+          }
+        }
+        setShowImageUploadMenu(false);
+      } catch (error) {
+        console.error('Error selecting images:', error);
+        Alert.alert(
+          l10n.errors.galleryErrorTitle,
+          l10n.errors.galleryErrorMessage,
+        );
+      } finally {
+        // Re-enable auto-release after gallery operation
+        modelStore.enableAutoRelease('image-gallery');
+      }
+    };
+
+    // Remove an image from the selection
+    const handleRemoveImage = (index: number) => {
+      const newImages = [...selectedImages];
+      newImages.splice(index, 1);
+      setSelectedImages(newImages);
+    };
+
+    const handleCancel = () => {
+      setText('');
+      onCancelEdit?.();
+    };
+
+    const isSendButtonVisible =
+      !isStreaming &&
+      !isStopVisible &&
+      user &&
+      !isVideoCapable && // Hide send button for video-capable pals
+      (sendButtonVisibilityMode === 'always' || value.trim());
+    const isSendButtonEnabled = value.trim().length > 0 && hasActiveModel;
+    const sendButtonOpacity = isSendButtonEnabled ? 1 : 0.4;
+
+    const onSurfaceColor = currentActivePal?.color?.[0] || theme.colors.text;
+    const onSurfaceColorVariant = onSurfaceColor + '55'; // for disabled state or placeholder text
+    // // Plus button state
+    // 加号**始终可点**（流式中除外）。以前它绑 isVisionEnabled，纯文本模型的
+    // 用户看到的是「灰的 +」，完全不知道有这个功能、更不知道模型不支持。
+    // 现在统一点亮，点下去再判断：支持视觉 → 弹「拍照/相册」菜单；
+    // 不支持 → 弹一句明确的提示，告诉用户当前模型没有视觉能力。
+    const isPlusButtonEnabled = !isStreaming;
+    const plusColor = isPlusButtonEnabled
+      ? onSurfaceColor
+      : onSurfaceColorVariant;
+
+    // 当前模型是否真的能吃图片
+    const modelSupportsVision = isVisionEnabled;
+
+    // 无视觉模型时的提示（替代「按钮变灰」）
+    const noVisionHint =
+      l10n.components?.chatInput?.noVisionHint ??
+      '当前模型不支持图像，无法使用图片输入。请在模型管理中加载一个带视觉能力的模型。';
+
+    // Localize the current graded-effort tier through the same table the
+    // model-settings chips use; fall back to the raw token for an unlisted one.
+    const effortLevelLabels = l10n.components.modelSettingsSheet.effortLevels;
+    const localizedEffort =
+      reasoningEffort && reasoningEffort in effortLevelLabels
+        ? effortLevelLabels[reasoningEffort as keyof typeof effortLevelLabels]
+        : reasoningEffort;
+
+    return (
+      <View style={styles.container}>
+        {/*
+          输入框本体走玻璃：原本只有 borderRadius + overflow，没有底色，
+          在玻璃风格下几乎看不出质感。SurfaceCard 会剥掉 backgroundColor
+          换成真玻璃（带边缘高光），非玻璃风格仍渲染成原来的普通 View。
+        */}
+        <SurfaceCard style={styles.inputContainer} tintOpacity={0.55}>
+          {/* 模型无视觉能力时点 + 的提示。比把按钮置灰友好得多。 */}
+          <Snackbar
+            testID="no-vision-hint"
+            visible={noVisionVisible}
+            duration={3200}
+            onDismiss={() => setNoVisionVisible(false)}
+            style={styles.noVisionSnackbar}>
+            {noVisionHint}
+          </Snackbar>
+          {/* Edit Bar (when in edit mode) */}
+          {isEditMode && (
+            <Animated.View
+              style={[
+                styles.editBar,
+                {
+                  height: editBarHeight,
+                },
+              ]}>
+              <Text variant="labelSmall" style={styles.editBarText}>
+                Editing message
+              </Text>
+              <IconButton
+                icon="close"
+                size={16}
+                onPress={handleCancel}
+                style={styles.editBarButton}
+                iconColor={theme.colors.onSurfaceVariant}
+              />
+            </Animated.View>
+          )}
+
+          {/* Image Preview Section */}
+          {selectedImages.length > 0 && (
+            <View
+              style={[
+                styles.imagePreviewContainer,
+                isEditMode && styles.imagePreviewContainerEditMode,
+              ]}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.imageScrollContent}>
+                {selectedImages.map((uri, index) => (
+                  <View key={`${uri}-${index}`} style={styles.imageContainer}>
+                    <Image
+                      source={{uri}}
+                      style={styles.previewImage}
+                      accessibilityLabel={`Image preview ${index + 1} of ${
+                        selectedImages.length
+                      }`}
+                    />
+                    <IconButton
+                      icon="close-circle"
+                      size={20}
+                      iconColor={theme.colors.error}
+                      style={styles.removeImageButton}
+                      onPress={() => handleRemoveImage(index)}
+                      accessibilityLabel={`Remove image ${index + 1}`}
+                    />
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Text Input Area (Top Row) */}
+          <View
+            style={[
+              styles.textInputArea,
+              {
+                paddingTop: isEditMode
+                  ? selectedImages.length > 0
+                    ? 8 // Reduced padding when images present in edit mode
+                    : 48 // Edit bar height (28px) + normal padding (20px)
+                  : selectedImages.length > 0
+                    ? 0
+                    : 20,
+              },
+            ]}>
+            {/* Subtle Prompt Label for Video Pals */}
+            {isVideoCapable && (
+              <Text
+                variant="labelSmall"
+                style={[styles.promptLabel, {color: onSurfaceColorVariant}]}>
+                {l10n.palsScreen.prompt}:
+              </Text>
+            )}
+            <TextInput
+              ref={inputRef}
+              multiline
+              placeholder={
+                isVideoCapable
+                  ? l10n.video.promptPlaceholder
+                  : l10n.components.chatInput.inputPlaceholder
+              }
+              placeholderTextColor={onSurfaceColorVariant}
+              underlineColorAndroid="transparent"
+              {...textInputProps}
+              style={[
+                styles.input,
+                textInputProps?.style,
+                {
+                  color: onSurfaceColor,
+                },
+                isVideoCapable && styles.inputWithLabel,
+              ]}
+              onChangeText={handleChangeText}
+              value={value}
+              editable={
+                isVideoCapable
+                  ? !isStreaming && !isCameraActive
+                  : textInputProps?.editable !== false
+              }
+              testID="chat-input"
+              accessibilityLabel="Message input"
+            />
+          </View>
+
+          {/* Control Bar (Bottom Row) */}
+          <View style={styles.controlBar}>
+            {/* Left Controls */}
+            <View style={styles.leftControls}>
+              {/* Plus Button for Image Upload (only for regular chat) */}
+              {showImageUpload && !isVideoCapable && (
+                <Menu
+                  visible={showImageUploadMenu}
+                  onDismiss={() => setShowImageUploadMenu(false)}
+                  anchorPosition="top"
+                  anchor={
+                    <TouchableOpacity
+                      style={styles.plusButton}
+                      hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+                      disabled={!isPlusButtonEnabled}
+                      onPress={
+                        isPlusButtonEnabled
+                          ? () => {
+                              if (modelSupportsVision) {
+                                handlePlusButtonPress();
+                              } else {
+                                setNoVisionVisible(true);
+                              }
+                            }
+                          : () => {}
+                      }
+                      accessibilityLabel="Add image"
+                      accessibilityRole="button">
+                      <PlusIcon width={26} height={26} stroke={plusColor} />
+                    </TouchableOpacity>
+                  }>
+                  <Menu.Item
+                    label={l10n.camera?.takePhoto || 'Camera'}
+                    icon="camera"
+                    onPress={handleTakePhoto}
+                  />
+                  <Menu.Item
+                    label={l10n.common?.gallery || 'Gallery'}
+                    icon="image"
+                    onPress={handleSelectImages}
+                  />
+                </Menu>
+              )}
+
+              {/* Pal 选择器（上拉箭头 + 名称）已按要求移除 */}
+
+              {/* Thinking Toggle Button. Graded models (axis-2) cycle
+                  off -> low -> medium -> high; effortless models toggle
+                  on/off. The label shows the current effort when graded. */}
+              {showThinkingToggle && !isCameraActive && (
+                <TouchableOpacity
+                  testID="thinking-toggle"
+                  style={[
+                    styles.thinkingToggleLeft,
+                    isThinkingEnabled && {backgroundColor: onSurfaceColor},
+                    {borderColor: onSurfaceColorVariant},
+                  ]}
+                  onPress={() =>
+                    supportsEffort && effortValues.length > 0
+                      ? onEffortCycle?.()
+                      : onThinkingToggle?.(!isThinkingEnabled)
+                  }
+                  accessibilityLabel={
+                    supportsEffort && effortValues.length > 0
+                      ? t(
+                          l10n.components.chatInput.thinkingToggle.cycleEffort,
+                          {
+                            level: localizedEffort ?? '',
+                          },
+                        )
+                      : isThinkingEnabled
+                        ? l10n.components.chatInput.thinkingToggle
+                            .disableThinking
+                        : l10n.components.chatInput.thinkingToggle
+                            .enableThinking
+                  }
+                  accessibilityRole="button">
+                  <AtomIcon
+                    width={14}
+                    height={14}
+                    stroke={
+                      isThinkingEnabled
+                        ? inputBackgroundColor
+                        : onSurfaceColorVariant
+                    }
+                    strokeWidth={2}
+                  />
+                  <Text
+                    style={[
+                      styles.thinkingToggleText,
+                      isThinkingEnabled
+                        ? {color: inputBackgroundColor}
+                        : {color: onSurfaceColorVariant},
+                    ]}>
+                    {supportsEffort && isThinkingEnabled && reasoningEffort
+                      ? localizedEffort
+                      : l10n.components.chatInput.thinkingToggle.thinkText}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Right Controls */}
+            <View style={styles.rightControls}>
+              {/* Helper text for model not loaded */}
+              {showModelWarning && !hasActiveModel && (
+                <View style={styles.helperTextContainer}>
+                  <Text variant="bodySmall" style={styles.helperText}>
+                    {l10n.chat.cannotSendWithoutModel}
+                  </Text>
+                </View>
+              )}
+
+              {/* Voice chip (TTS) — always present so users can stop
+                  audio independently of text generation. Self-gates:
+                  returns null when TTS is unavailable. */}
+              <VoiceChip />
+
+              {/* Send/Stop Button */}
+              {isStopVisible ? (
+                <StopButton color={onSurfaceColor} onPress={onStopPress} />
+              ) : isVideoCapable && !isCameraActive ? (
+                /* Compact Start Video Button for Video Pals */
+                <TouchableOpacity
+                  style={[
+                    styles.compactVideoButton,
+                    {
+                      backgroundColor: onSurfaceColor,
+                    },
+                  ]}
+                  onPress={onStartCamera}
+                  accessibilityLabel="Start video analysis"
+                  accessibilityRole="button">
+                  <VideoRecorderIcon
+                    width={16}
+                    height={16}
+                    stroke="white"
+                    strokeWidth={2}
+                  />
+                  <Text style={styles.compactButtonText}>
+                    {l10n.video.startCamera}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                isSendButtonVisible && (
+                  <View style={{opacity: sendButtonOpacity}}>
+                    <SendButton color={onSurfaceColor} onPress={handleSend} />
+                  </View>
+                )
+              )}
+            </View>
+          </View>
+        </SurfaceCard>
+      </View>
+    );
+  },
+);

@@ -1,0 +1,20 @@
+{
+  "common": {
+    "cancel": "Avbryt",
+    "delete": "Ta bort"
+  },
+  "onboarding": {
+    "screen1": {
+      "title": "Din AI, redo i fickan.",
+      "titleAccent": "fickan.",
+      "body": "En privat assistent som körs på din telefon och använder molnmodeller när du behöver mer kraft. Vi ställer in allt på en minut."
+    },
+    "screen5": {
+      "title": "Vad skulle du vilja göra?",
+      "body": "Välj vad du vill utforska — vi förbereder rätt verktyg för din telefon.",
+      "topicDescription": {
+        "else": "Utforska allt senare i appen"
+      }
+    }
+  }
+}
